@@ -1,6 +1,5 @@
-// stores/useThemeStore.ts
-
 import { create } from "zustand";
+import { subscribeWithSelector } from "zustand/middleware";
 
 export type Theme = "light" | "dark" | "system";
 
@@ -16,45 +15,59 @@ const getSystemTheme = (): "light" | "dark" =>
 const applyTheme = (theme: Theme) => {
   const root = document.documentElement;
   const actual = theme === "system" ? getSystemTheme() : theme;
-
   root.classList.remove("light", "dark");
   root.classList.add(actual);
 };
 
-export const useThemeStore = create<ThemeStore>((set) => {
-  let initialTheme: Theme = "system";
-  let resolved: "light" | "dark" = "light";
-
-  if (typeof window !== "undefined") {
-    initialTheme = (localStorage.getItem("theme") as Theme) || "system";
-    resolved = initialTheme === "system" ? getSystemTheme() : initialTheme;
-
-    applyTheme(initialTheme);
-
-    // System change listener
-    window
-      .matchMedia("(prefers-color-scheme: dark)")
-      .addEventListener("change", (e) => {
-        const saved = localStorage.getItem("theme") as Theme;
-        if (saved === "system") {
-          const newResolved = e.matches ? "dark" : "light";
-          document.documentElement.classList.remove("light", "dark");
-          document.documentElement.classList.add(newResolved);
-          set({ resolvedTheme: newResolved });
+export const useThemeStore = create<ThemeStore>()(
+  subscribeWithSelector((set, get) => {
+    // Always start with identical values on server and client
+    const initialState = {
+      theme: "system" as Theme,
+      resolvedTheme: "light" as "light" | "dark",
+      setTheme: (theme: Theme) => {
+        if (typeof window !== "undefined") {
+          localStorage.setItem("theme", theme);
+          applyTheme(theme);
         }
-      });
-  }
+        set({
+          theme,
+          resolvedTheme: theme === "system" ? getSystemTheme() : theme,
+        });
+      },
+    };
 
-  return {
-    theme: initialTheme,
-    resolvedTheme: resolved,
-    setTheme: (theme: Theme) => {
-      localStorage.setItem("theme", theme);
-      applyTheme(theme);
-      set({
-        theme,
-        resolvedTheme: theme === "system" ? getSystemTheme() : theme,
+    // Client-side hydration logic
+    if (typeof window !== "undefined") {
+      // Use requestAnimationFrame to ensure this runs after React hydration
+      requestAnimationFrame(() => {
+        const savedTheme = (localStorage.getItem("theme") as Theme) || "system";
+        const actualResolved =
+          savedTheme === "system" ? getSystemTheme() : savedTheme;
+
+        applyTheme(savedTheme);
+
+        set({
+          theme: savedTheme,
+          resolvedTheme: actualResolved,
+        });
+
+        // System change listener
+        const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+        const handleSystemChange = (e: MediaQueryListEvent) => {
+          const currentTheme = get().theme;
+          if (currentTheme === "system") {
+            const newResolved = e.matches ? "dark" : "light";
+            document.documentElement.classList.remove("light", "dark");
+            document.documentElement.classList.add(newResolved);
+            set({ resolvedTheme: newResolved });
+          }
+        };
+
+        mediaQuery.addEventListener("change", handleSystemChange);
       });
-    },
-  };
-});
+    }
+
+    return initialState;
+  }),
+);
